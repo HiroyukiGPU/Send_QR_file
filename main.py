@@ -70,6 +70,7 @@ class QRApp(tk.Tk):
         self.title('QR ファイル転送')
         self.configure(bg=BG)
         self.resizable(False, False)
+        self.minsize(760, 560)
 
         # カメラ
         self._cam_idx     = 0
@@ -138,7 +139,7 @@ class QRApp(tk.Tk):
 
         self._sf = self._build_send_ui()
         self._rf = self._build_recv_ui()
-        self._sf.pack(fill='both')
+        self._sf.pack(fill='both', expand=True)
 
         # バックグラウンドでカメラ一覧を検索
         threading.Thread(target=self._enumerate_cams, daemon=True).start()
@@ -249,14 +250,14 @@ class QRApp(tk.Tk):
         self._mode = mode
         if mode == 'send':
             self._rf.pack_forget()
-            self._sf.pack(fill='both')
+            self._sf.pack(fill='both', expand=True)
             self._bsend.configure(bg=BLUE, fg='white',
                                   font=('Helvetica', 11, 'bold'))
             self._brecv.configure(bg=BG3, fg=FG2,
                                   font=('Helvetica', 11))
         else:
             self._sf.pack_forget()
-            self._rf.pack(fill='both')
+            self._rf.pack(fill='both', expand=True)
             self._brecv.configure(bg=GREEN, fg='white',
                                   font=('Helvetica', 11, 'bold'))
             self._bsend.configure(bg=BG3, fg=FG2,
