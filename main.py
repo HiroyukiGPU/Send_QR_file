@@ -22,10 +22,10 @@ import os
 import sys
 
 # ── 定数 ────────────────────────────────────────────────────────
-CHUNK_SIZE = 600
-QR_PX      = 300
-CAM_W      = 300
-CAM_H      = 225
+CHUNK_SIZE = 280
+QR_PX      = 520
+CAM_W      = 280
+CAM_H      = 210
 
 # 完全ライトモード配色
 # macOS が fg を黒に上書きしても「黒文字×白背景」で必ず可視
@@ -58,12 +58,18 @@ def lbl(parent, text, bg=PANEL, fg=TX, font=('Helvetica', 10), **kw):
 
 def gen_qr(text: str) -> ImageTk.PhotoImage:
     qr = qrcode.QRCode(
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=5, border=2)
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10, border=4)
     qr.add_data(text)
     qr.make(fit=True)
     img = qr.make_image(fill_color='black', back_color='white').convert('RGB')
-    img = img.resize((QR_PX, QR_PX), Image.NEAREST)
+    if img.width > QR_PX or img.height > QR_PX:
+        img = img.resize((QR_PX, QR_PX), Image.NEAREST)
+    else:
+        canvas = Image.new('RGB', (QR_PX, QR_PX), 'white')
+        offset = ((QR_PX - img.width) // 2, (QR_PX - img.height) // 2)
+        canvas.paste(img, offset)
+        img = canvas
     return ImageTk.PhotoImage(img)
 
 
@@ -89,7 +95,7 @@ class QRApp(tk.Tk):
             pass
         self.title('QR ファイル転送')
         self.configure(bg=WIN)
-        self.geometry('730x590')
+        self.geometry('980x760')
         self.resizable(False, False)
 
         # プレースホルダー画像
@@ -256,18 +262,18 @@ class QRApp(tk.Tk):
 
         # 2パネル行
         row = tk.Frame(f, bg=WIN)
-        row.pack(padx=8)
+        row.pack(padx=10, pady=(4, 0))
 
         # 左: QRパネル（白背景）
         lp = tk.Frame(row, bg=PANEL, bd=1, relief='solid',
                       highlightbackground='#cbd5e1', highlightthickness=0)
-        lp.pack(side='left', padx=6)
+        lp.pack(side='left', padx=(6, 10))
         lbl(lp, '送信QR  （受信側に見せる）', PANEL, TX2,
             font=('Helvetica', 9), pady=6).pack()
         self._sq_c = tk.Label(lp, image=self._ph_qr, bg='white', bd=0,
                               highlightthickness=0)
         self._sq_c._img = self._ph_qr
-        self._sq_c.pack(padx=8, pady=2)
+        self._sq_c.pack(padx=12, pady=8)
         self._s_seq_lbl = lbl(lp, '— / —', PANEL, TX,
                                font=('Helvetica', 15, 'bold'), pady=2)
         self._s_seq_lbl.pack()
@@ -277,13 +283,13 @@ class QRApp(tk.Tk):
         # 右: カメラパネル（白背景で枠付き）
         rp = tk.Frame(row, bg=PANEL, bd=1, relief='solid',
                       highlightbackground='#cbd5e1', highlightthickness=0)
-        rp.pack(side='left', padx=6)
+        rp.pack(side='left', padx=(0, 6))
         lbl(rp, 'ACKスキャン  （受信側の画面を撮影）', PANEL, TX2,
             font=('Helvetica', 9), pady=6).pack()
         self._s_cam_c = tk.Label(rp, image=self._ph_cam, bg='#c8d4e0', bd=1,
                                  relief='solid', highlightthickness=0)
         self._s_cam_c._img = self._ph_cam
-        self._s_cam_c.pack(padx=8, pady=2)
+        self._s_cam_c.pack(padx=8, pady=8)
         self._s_st = lbl(rp, 'ファイルを選択するとQRが表示されます',
                           PANEL, TX2,
                           font=('Helvetica', 9), pady=6, wraplength=300)
@@ -307,18 +313,18 @@ class QRApp(tk.Tk):
         self._r_infolbl.pack(fill='x', padx=16, pady=(12, 8))
 
         row = tk.Frame(f, bg=WIN)
-        row.pack(padx=8)
+        row.pack(padx=10, pady=(4, 0))
 
         # 左: ACK QRパネル（白背景）
         lp = tk.Frame(row, bg=PANEL, bd=1, relief='solid',
                       highlightbackground='#cbd5e1', highlightthickness=0)
-        lp.pack(side='left', padx=6)
+        lp.pack(side='left', padx=(6, 10))
         lbl(lp, 'ACK QR  （送信側に見せる）', PANEL, TX2,
             font=('Helvetica', 9), pady=6).pack()
         self._rq_c = tk.Label(lp, image=self._ph_qr, bg='white', bd=0,
                               highlightthickness=0)
         self._rq_c._img = self._ph_qr
-        self._rq_c.pack(padx=8, pady=2)
+        self._rq_c.pack(padx=12, pady=8)
         self._r_seq_lbl = lbl(lp, '— / —', PANEL, TX,
                                font=('Helvetica', 15, 'bold'), pady=2)
         self._r_seq_lbl.pack()
@@ -328,13 +334,13 @@ class QRApp(tk.Tk):
         # 右: カメラパネル（白背景）
         rp = tk.Frame(row, bg=PANEL, bd=1, relief='solid',
                       highlightbackground='#cbd5e1', highlightthickness=0)
-        rp.pack(side='left', padx=6)
+        rp.pack(side='left', padx=(0, 6))
         lbl(rp, 'チャンクスキャン  （送信側の画面を撮影）', PANEL, TX2,
             font=('Helvetica', 9), pady=6).pack()
         self._r_cam_c = tk.Label(rp, image=self._ph_cam, bg='#c8d4e0', bd=1,
                                  relief='solid', highlightthickness=0)
         self._r_cam_c._img = self._ph_cam
-        self._r_cam_c.pack(padx=8, pady=2)
+        self._r_cam_c.pack(padx=8, pady=8)
         self._r_st = lbl(rp, '送信側の画面にカメラを向けてください',
                           PANEL, TX2,
                           font=('Helvetica', 9), pady=6, wraplength=300)
@@ -485,8 +491,10 @@ class QRApp(tk.Tk):
                 continue
             fail_count = 0
             try:
-                qr_frame = cv2.resize(frame, (640, 480))
-                data, _, _ = detector.detectAndDecode(qr_frame)
+                data, _, _ = detector.detectAndDecode(frame)
+                if not data:
+                    qr_frame = cv2.resize(frame, (960, 720))
+                    data, _, _ = detector.detectAndDecode(qr_frame)
                 if data:
                     t = time.time()
                     if data != self._last_qr or t - self._last_qr_t > 1.2:
