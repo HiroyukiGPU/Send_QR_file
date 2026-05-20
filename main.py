@@ -102,7 +102,9 @@ class QRApp(tk.Tk):
         self._last_qr        = ''
         self._last_qr_t      = 0.0
         self._pending_frame  = None
-        self._draw_scheduled = False
+        self._pending_qr     = None
+        self._cam_error      = None
+        self._cam_status     = None
 
         # 送信ステート
         self.s_chunks:   list[str]       = []
@@ -122,6 +124,7 @@ class QRApp(tk.Tk):
         self._build_ui()
         self.update_idletasks()
         self.configure(bg=WIN)
+        self.after(33, self._ui_tick)
         if sys.platform == 'darwin':
             self._init_mac_camera()
         else:
@@ -145,6 +148,26 @@ class QRApp(tk.Tk):
         for widget in (self._s_st, self._r_st):
             widget.config(text=text, fg=color, bg=PANEL,
                           activeforeground=color, activebackground=PANEL)
+
+    def _queue_cam_status(self, text: str, color=TX2):
+        self._cam_status = (text, color)
+
+    def _ui_tick(self):
+        if self._cam_status is not None:
+            text, color = self._cam_status
+            self._cam_status = None
+            self._set_cam_status(text, color)
+        if self._pending_frame is not None:
+            self._flush_cam_frame()
+        if self._pending_qr is not None:
+            data = self._pending_qr
+            self._pending_qr = None
+            self._on_qr(data)
+        if self._cam_error is not None:
+            title, message = self._cam_error
+            self._cam_error = None
+            messagebox.showerror(title, message)
+        self.after(33, self._ui_tick)
 
     def _init_mac_camera(self):
         menu = self._cam_menu['menu']
@@ -410,9 +433,10 @@ class QRApp(tk.Tk):
 
     def _start_camera(self):
         self.cam_running     = True
-        self._draw_scheduled = False
         self._pending_frame  = None
-        self._set_cam_status(f'カメラ {self._cam_idx} を起動中…', BLUE)
+        self._pending_qr     = None
+        self._cam_error      = None
+        self._queue_cam_status(f'カメラ {self._cam_idx} を起動中…', BLUE)
         threading.Thread(target=self._cam_loop, daemon=True).start()
 
     def _cam_loop(self):
@@ -436,17 +460,16 @@ class QRApp(tk.Tk):
                 break
             candidate_cap.release()
         if cap is None:
-            self.after(0, lambda: messagebox.showerror(
+            self._cam_error = (
                 'カメラエラー',
                 f'カメラ {idx} を開けましたが映像を取得できません\n'
-                'FaceTime / Zoom / ブラウザなどを閉じて再試行してください'))
-            self.after(0, lambda: self._set_cam_status(
-                f'カメラ {idx} の映像を取得できません', RED))
+                'FaceTime / Zoom / ブラウザなどを閉じて再試行してください'
+            )
+            self._queue_cam_status(f'カメラ {idx} の映像を取得できません', RED)
             return
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        self.after(0, lambda: self._set_cam_status(
-            f'カメラ {idx} 接続中 ({backend_name})', GREEN))
+        self._queue_cam_status(f'カメラ {idx} 接続中 ({backend_name})', GREEN)
         detector   = cv2.QRCodeDetector()
         fail_count = 0
         while self.cam_running:
@@ -454,7 +477,9 @@ class QRApp(tk.Tk):
             if not ok:
                 fail_count += 1
                 if fail_count >= 30:
-                    self.after(0, self._on_cam_disconnect)
+                    self._queue_cam_status(
+                        'カメラが切断されました。\n別のカメラを選択してください。',
+                        RED)
                     break
                 time.sleep(0.1)
                 continue
@@ -467,20 +492,16 @@ class QRApp(tk.Tk):
                     if data != self._last_qr or t - self._last_qr_t > 1.2:
                         self._last_qr   = data
                         self._last_qr_t = t
-                        self.after(0, lambda d=data: self._on_qr(d))
+                        self._pending_qr = data
             except Exception:
                 pass
             small = cv2.resize(frame, (CAM_W, CAM_H))
             self._pending_frame = Image.fromarray(
                 cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
-            if not self._draw_scheduled:
-                self._draw_scheduled = True
-                self.after(0, self._flush_cam_frame)
             time.sleep(0.04)
         cap.release()
 
     def _flush_cam_frame(self):
-        self._draw_scheduled = False
         frame = self._pending_frame
         if frame is None:
             return
