@@ -122,13 +122,26 @@ class QRApp(tk.Tk):
         self._build_ui()
         self.update_idletasks()
         self.configure(bg=WIN)
-        threading.Thread(target=self._enumerate_cams, daemon=True).start()
+        if sys.platform == 'darwin':
+            self._init_mac_camera()
+        else:
+            threading.Thread(target=self._enumerate_cams, daemon=True).start()
         self.protocol('WM_DELETE_WINDOW', self._quit)
 
     def _open_camera(self, idx: int):
         if sys.platform == 'darwin':
             return cv2.VideoCapture(idx, cv2.CAP_AVFOUNDATION)
         return cv2.VideoCapture(idx)
+
+    def _init_mac_camera(self):
+        menu = self._cam_menu['menu']
+        menu.delete(0, 'end')
+        menu.add_command(label='カメラ 0',
+                         command=lambda: self._select_cam('カメラ 0'))
+        self._cam_var.set('カメラ 0')
+        self._cam_menu.config(state='normal')
+        self._cam_idx = 0
+        self.after(50, self._start_camera)
 
     # ── UIビルド ─────────────────────────────────────────────────
 
@@ -167,8 +180,9 @@ class QRApp(tk.Tk):
         cf.pack(side='right')
         lbl(cf, 'カメラ:', HDR, TX2,
             font=('Helvetica', 10)).pack(side='left')
-        self._cam_var = tk.StringVar(value='検索中…')
-        self._cam_menu = tk.OptionMenu(cf, self._cam_var, '検索中…')
+        initial_cam_label = 'カメラ 0' if sys.platform == 'darwin' else '検索中…'
+        self._cam_var = tk.StringVar(value=initial_cam_label)
+        self._cam_menu = tk.OptionMenu(cf, self._cam_var, initial_cam_label)
         self._cam_menu.config(
             bg=PANEL, fg=TX,
             activebackground='#e2e8f0', activeforeground=TX,
@@ -338,22 +352,6 @@ class QRApp(tk.Tk):
     # ── カメラ ───────────────────────────────────────────────────
 
     def _enumerate_cams(self):
-        if sys.platform == 'darwin':
-            labels = ['カメラ 0']
-
-            def _update_mac():
-                menu = self._cam_menu['menu']
-                menu.delete(0, 'end')
-                menu.add_command(label='カメラ 0',
-                                 command=lambda: self._select_cam('カメラ 0'))
-                self._cam_var.set('カメラ 0')
-                self._cam_menu.config(state='normal')
-                self._cam_idx = 0
-                self._start_camera()
-
-            self.after(0, _update_mac)
-            return
-
         found: list[int] = []
         max_probe = 8
         for i in range(max_probe):
