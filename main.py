@@ -338,16 +338,30 @@ class QRApp(tk.Tk):
     # ── カメラ ───────────────────────────────────────────────────
 
     def _enumerate_cams(self):
+        if sys.platform == 'darwin':
+            labels = ['カメラ 0']
+
+            def _update_mac():
+                menu = self._cam_menu['menu']
+                menu.delete(0, 'end')
+                menu.add_command(label='カメラ 0',
+                                 command=lambda: self._select_cam('カメラ 0'))
+                self._cam_var.set('カメラ 0')
+                self._cam_menu.config(state='normal')
+                self._cam_idx = 0
+                self._start_camera()
+
+            self.after(0, _update_mac)
+            return
+
         found: list[int] = []
-        max_probe = 2 if sys.platform == 'darwin' else 8
+        max_probe = 8
         for i in range(max_probe):
             cap = self._open_camera(i)
             opened = cap.isOpened()
             cap.release()
             if opened:
                 found.append(i)
-                if sys.platform == 'darwin':
-                    break
             elif found:
                 break
         labels = [f'カメラ {i}' for i in found] if found else ['カメラなし']
