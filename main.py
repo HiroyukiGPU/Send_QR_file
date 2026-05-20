@@ -133,6 +133,19 @@ class QRApp(tk.Tk):
             return cv2.VideoCapture(idx, cv2.CAP_AVFOUNDATION)
         return cv2.VideoCapture(idx)
 
+    def _open_camera_candidates(self, idx: int):
+        if sys.platform == 'darwin':
+            return [
+                ('AVFoundation', cv2.VideoCapture(idx, cv2.CAP_AVFOUNDATION)),
+                ('Default', cv2.VideoCapture(idx)),
+            ]
+        return [('Default', cv2.VideoCapture(idx))]
+
+    def _set_cam_status(self, text: str, color=TX2):
+        for widget in (self._s_st, self._r_st):
+            widget.config(text=text, fg=color, bg=PANEL,
+                          activeforeground=color, activebackground=PANEL)
+
     def _init_mac_camera(self):
         menu = self._cam_menu['menu']
         menu.delete(0, 'end')
@@ -399,18 +412,41 @@ class QRApp(tk.Tk):
         self.cam_running     = True
         self._draw_scheduled = False
         self._pending_frame  = None
+        self._set_cam_status(f'カメラ {self._cam_idx} を起動中…', BLUE)
         threading.Thread(target=self._cam_loop, daemon=True).start()
 
     def _cam_loop(self):
         idx = self._cam_idx
-        cap = self._open_camera(idx)
-        if not cap.isOpened():
+        cap = None
+        backend_name = ''
+        for candidate_name, candidate_cap in self._open_camera_candidates(idx):
+            if not candidate_cap.isOpened():
+                candidate_cap.release()
+                continue
+            ok = False
+            for _ in range(20):
+                frame_ok, _ = candidate_cap.read()
+                if frame_ok:
+                    ok = True
+                    break
+                time.sleep(0.05)
+            if ok:
+                cap = candidate_cap
+                backend_name = candidate_name
+                break
+            candidate_cap.release()
+        if cap is None:
             self.after(0, lambda: messagebox.showerror(
                 'カメラエラー',
-                f'カメラ {idx} を開けません\n別のカメラを選択してください'))
+                f'カメラ {idx} を開けましたが映像を取得できません\n'
+                'FaceTime / Zoom / ブラウザなどを閉じて再試行してください'))
+            self.after(0, lambda: self._set_cam_status(
+                f'カメラ {idx} の映像を取得できません', RED))
             return
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.after(0, lambda: self._set_cam_status(
+            f'カメラ {idx} 接続中 ({backend_name})', GREEN))
         detector   = cv2.QRCodeDetector()
         fail_count = 0
         while self.cam_running:
@@ -455,10 +491,8 @@ class QRApp(tk.Tk):
         lbl_w._img = photo
 
     def _on_cam_disconnect(self):
-        st = self._s_st if self._mode == 'send' else self._r_st
-        st.config(text='カメラが切断されました。\n別のカメラを選択してください。',
-                  fg=RED, bg=PANEL,
-                  activeforeground=RED, activebackground=PANEL)
+        self._set_cam_status('カメラが切断されました。\n別のカメラを選択してください。',
+                             RED)
 
     def _on_qr(self, data: str):
         if self._mode == 'send':
