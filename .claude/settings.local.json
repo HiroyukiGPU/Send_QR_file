@@ -22,7 +22,10 @@
       "Read(//tmp/**)",
       "Bash(rtk read *)",
       "Bash(kill 82986)",
-      "Bash(chmod +x *)"
+      "Bash(chmod +x *)",
+      "Bash(python3 \"/Users/miyaderahiroyuki/Desktop/programs/python/qrデータ転送/main.py\")",
+      "Bash(awk '{print \"PID:\", $2, \"— 起動確認OK\"}')",
+      "Bash(kill 85818)"
     ]
   }
 }
