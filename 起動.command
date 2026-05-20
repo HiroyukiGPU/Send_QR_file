@@ -8,6 +8,13 @@ cd "$(dirname "$0")"
 VENV=".venv"
 DEPS="opencv-python qrcode[pil] pillow zxing-cpp"
 
+ensure_venv_pip() {
+    if ! "$VENV/bin/python3" -m pip --version >/dev/null 2>&1; then
+        echo "🧰  pip をセットアップ中..."
+        "$VENV/bin/python3" -m ensurepip --upgrade >/dev/null
+    fi
+}
+
 # ── Python を探す ──────────────────────────────────────────────
 find_python() {
     local candidates=(
@@ -77,9 +84,10 @@ setup_venv() {
     "$base_py" -m venv "$VENV"
 
     echo "📥  依存パッケージをインストール中..."
-    "$VENV/bin/pip" install --upgrade pip -q
+    ensure_venv_pip
+    "$VENV/bin/python3" -m pip install --upgrade pip -q
     # shellcheck disable=SC2086
-    "$VENV/bin/pip" install $DEPS -q
+    "$VENV/bin/python3" -m pip install $DEPS -q
     echo "✅  インストール完了"
 }
 
@@ -96,11 +104,13 @@ if [[ ! -x "$VENV/bin/python3" ]]; then
     setup_venv
 fi
 
+ensure_venv_pip
+
 # 必要パッケージが揃っているか確認（揃っていなければ追加インストール）
 if ! "$VENV/bin/python3" -c "import cv2, qrcode, PIL, zxingcpp" 2>/dev/null; then
     echo "📥  不足パッケージを追加インストール中..."
     # shellcheck disable=SC2086
-    "$VENV/bin/pip" install $DEPS -q
+    "$VENV/bin/python3" -m pip install $DEPS -q
 fi
 
 # ── 起動 ──────────────────────────────────────────────────────
