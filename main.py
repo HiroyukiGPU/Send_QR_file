@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["opencv-python", "qrcode[pil]", "pillow"]
+# dependencies = ["opencv-python", "qrcode[pil]", "pillow", "zxing-cpp"]
 # ///
 """
 QR ファイル転送 — 双方向 Stop-and-Wait プロトコル
@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import cv2
 import qrcode
+import zxingcpp
 from PIL import Image, ImageTk
 import json
 import base64
@@ -77,6 +78,45 @@ def fmt_bytes(n: int) -> str:
     if n < 1024:    return f'{n} B'
     if n < 1 << 20: return f'{n/1024:.1f} KB'
     return f'{n/(1<<20):.1f} MB'
+
+
+def decode_qr_robust(frame) -> str:
+    h, w = frame.shape[:2]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Try several views of the same frame to tolerate blur, glare, and
+    # a QR that occupies only the center of the captured image.
+    variants = [frame, gray]
+
+    if w >= 600 and h >= 600:
+        cx0, cx1 = w // 6, w * 5 // 6
+        cy0, cy1 = h // 6, h * 5 // 6
+        center = frame[cy0:cy1, cx0:cx1]
+        center_gray = gray[cy0:cy1, cx0:cx1]
+        variants.extend([center, center_gray])
+    else:
+        center_gray = gray
+
+    variants.append(cv2.resize(frame, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC))
+    variants.append(cv2.resize(center_gray, None, fx=1.8, fy=1.8, interpolation=cv2.INTER_CUBIC))
+
+    blur = cv2.GaussianBlur(center_gray, (5, 5), 0)
+    variants.append(cv2.adaptiveThreshold(
+        blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 3))
+    _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    variants.append(otsu)
+
+    for candidate in variants:
+        try:
+            results = zxingcpp.read_barcodes(candidate)
+        except Exception:
+            continue
+        for result in results:
+            text = getattr(result, 'text', '')
+            fmt = str(getattr(result, 'format', ''))
+            if text and 'QR' in fmt.upper():
+                return text
+    return ''
 
 
 class QRApp(tk.Tk):
@@ -476,7 +516,6 @@ class QRApp(tk.Tk):
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self._queue_cam_status(f'カメラ {idx} 接続中 ({backend_name})', GREEN)
-        detector   = cv2.QRCodeDetector()
         fail_count = 0
         while self.cam_running:
             ok, frame = cap.read()
@@ -491,10 +530,7 @@ class QRApp(tk.Tk):
                 continue
             fail_count = 0
             try:
-                data, _, _ = detector.detectAndDecode(frame)
-                if not data:
-                    qr_frame = cv2.resize(frame, (960, 720))
-                    data, _, _ = detector.detectAndDecode(qr_frame)
+                data = decode_qr_robust(frame)
                 if data:
                     t = time.time()
                     if data != self._last_qr or t - self._last_qr_t > 1.2:

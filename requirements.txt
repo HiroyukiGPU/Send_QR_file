@@ -1,3 +1,4 @@
 opencv-python
 qrcode[pil]
 pillow
+zxing-cpp

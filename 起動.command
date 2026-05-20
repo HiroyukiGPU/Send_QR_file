@@ -6,7 +6,7 @@ set -e
 cd "$(dirname "$0")"
 
 VENV=".venv"
-DEPS="opencv-python qrcode[pil] pillow"
+DEPS="opencv-python qrcode[pil] pillow zxing-cpp"
 
 # ── Python を探す ──────────────────────────────────────────────
 find_python() {
@@ -97,7 +97,7 @@ if [[ ! -x "$VENV/bin/python3" ]]; then
 fi
 
 # 必要パッケージが揃っているか確認（揃っていなければ追加インストール）
-if ! "$VENV/bin/python3" -c "import cv2, qrcode, PIL" 2>/dev/null; then
+if ! "$VENV/bin/python3" -c "import cv2, qrcode, PIL, zxingcpp" 2>/dev/null; then
     echo "📥  不足パッケージを追加インストール中..."
     # shellcheck disable=SC2086
     "$VENV/bin/pip" install $DEPS -q
