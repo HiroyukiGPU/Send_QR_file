@@ -69,8 +69,8 @@ class QRApp(tk.Tk):
         super().__init__()
         self.title('QR ファイル転送')
         self.configure(bg=BG)
+        self.geometry('770x590')
         self.resizable(False, False)
-        self.minsize(760, 560)
 
         # カメラ
         self._cam_idx     = 0
