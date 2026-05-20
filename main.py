@@ -72,11 +72,17 @@ class QRApp(tk.Tk):
         self.geometry('770x590')
         self.resizable(False, False)
 
+        # Label用プレースホルダー画像（Canvas廃止・クロスプラットフォーム対応）
+        self._ph_qr  = ImageTk.PhotoImage(Image.new('RGB', (QR_PX, QR_PX), 'white'))
+        self._ph_cam = ImageTk.PhotoImage(Image.new('RGB', (CAM_W, CAM_H), '#111111'))
+
         # カメラ
-        self._cam_idx     = 0
-        self.cam_running  = False
-        self._last_qr     = ''
-        self._last_qr_t   = 0.0
+        self._cam_idx       = 0
+        self.cam_running    = False
+        self._last_qr       = ''
+        self._last_qr_t     = 0.0
+        self._pending_frame = None   # 最新フレームだけ保持
+        self._draw_scheduled = False  # after()の多重登録を防ぐ
 
         # 送信ステート
         self.s_chunks:  list[str]    = []
@@ -145,33 +151,33 @@ class QRApp(tk.Tk):
         threading.Thread(target=self._enumerate_cams, daemon=True).start()
 
     def _qr_panel(self, parent, title: str):
-        """QRコード表示パネルを作成して (frame, canvas, chunk_label) を返す"""
+        """QRコード表示パネルを作成して (frame, label, chunk_label) を返す"""
         outer = tk.Frame(parent, bg=BG2, padx=10, pady=10)
         tk.Label(outer, text=title, bg=BG2, fg=FG2,
                  font=('Helvetica', 9)).pack()
-        c = tk.Canvas(outer, width=QR_PX, height=QR_PX,
-                      bg='white', highlightthickness=0)
-        c.pack(pady=(6, 4))
-        lbl = tk.Label(outer, text='— / —',
-                       bg=BG2, fg=FG, font=('Helvetica', 18, 'bold'))
-        lbl.pack()
+        img_lbl = tk.Label(outer, image=self._ph_qr, bg='white', bd=0)
+        img_lbl._img = self._ph_qr
+        img_lbl.pack(pady=(6, 4))
+        chunk_lbl = tk.Label(outer, text='— / —',
+                             bg=BG2, fg=FG, font=('Helvetica', 18, 'bold'))
+        chunk_lbl.pack()
         tk.Label(outer, text='チャンク', bg=BG2, fg='#444',
                  font=('Helvetica', 8)).pack(pady=(1, 8))
-        return outer, c, lbl
+        return outer, img_lbl, chunk_lbl
 
     def _cam_panel(self, parent, title: str):
-        """カメラ表示パネルを作成して (frame, canvas, status_label) を返す"""
+        """カメラ表示パネルを作成して (frame, label, status_label) を返す"""
         outer = tk.Frame(parent, bg=BG2, padx=10, pady=10)
         tk.Label(outer, text=title, bg=BG2, fg=FG2,
                  font=('Helvetica', 9)).pack()
-        c = tk.Canvas(outer, width=CAM_W, height=CAM_H,
-                      bg='#111111', highlightthickness=0)
-        c.pack(pady=(6, 4))
+        img_lbl = tk.Label(outer, image=self._ph_cam, bg='#111111', bd=0)
+        img_lbl._img = self._ph_cam
+        img_lbl.pack(pady=(6, 4))
         st = tk.Label(outer, text='',
                       bg=BG2, fg=FG2,
                       font=('Helvetica', 9), wraplength=320)
         st.pack()
-        return outer, c, st
+        return outer, img_lbl, st
 
     def _build_send_ui(self):
         f = tk.Frame(self, bg=BG, padx=14, pady=12)
@@ -311,7 +317,9 @@ class QRApp(tk.Tk):
         threading.Thread(target=_delayed_restart, daemon=True).start()
 
     def _start_camera(self):
-        self.cam_running = True
+        self.cam_running     = True
+        self._draw_scheduled = False
+        self._pending_frame  = None
         threading.Thread(target=self._cam_loop, daemon=True).start()
 
     def _cam_loop(self):
@@ -323,17 +331,28 @@ class QRApp(tk.Tk):
                 f'カメラ {idx} を開けません\n別のカメラを選択してください'))
             return
 
-        detector = cv2.QRCodeDetector()
+        # 高解像度カメラ（iPhoneなど）を1280×720に制限してCPU負荷を抑える
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+        detector   = cv2.QRCodeDetector()
+        fail_count = 0
 
         while self.cam_running:
             ok, frame = cap.read()
             if not ok:
-                time.sleep(0.05)
+                fail_count += 1
+                if fail_count >= 30:           # 約3秒連続失敗 → カメラ切断と判定
+                    self.after(0, self._on_cam_disconnect)
+                    break
+                time.sleep(0.1)
                 continue
+            fail_count = 0
 
-            # QR検出
+            # QR検出は640×480に縮小してから行い高負荷を避ける
             try:
-                data, _, _ = detector.detectAndDecode(frame)
+                qr_frame = cv2.resize(frame, (640, 480))
+                data, _, _ = detector.detectAndDecode(qr_frame)
                 if data:
                     t = time.time()
                     if data != self._last_qr or t - self._last_qr_t > 1.2:
@@ -343,23 +362,39 @@ class QRApp(tk.Tk):
             except Exception:
                 pass
 
-            # カメラ映像をPIL Imageに変換（スレッドセーフ）
-            small    = cv2.resize(frame, (CAM_W, CAM_H))
-            pil_img  = Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
-            # UIスレッドで描画
-            self.after(0, lambda im=pil_img: self._draw_cam(im))
+            # 表示フレームを準備 — after()キューに溜めず最新1枚だけ置く
+            small = cv2.resize(frame, (CAM_W, CAM_H))
+            self._pending_frame = Image.fromarray(
+                cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
+            if not self._draw_scheduled:
+                self._draw_scheduled = True
+                self.after(0, self._flush_cam_frame)
 
             time.sleep(0.04)  # ~25fps
 
         cap.release()
 
+    def _flush_cam_frame(self):
+        """UIスレッドで最新フレームを1枚だけ描画する"""
+        self._draw_scheduled = False
+        frame = self._pending_frame
+        if frame is None:
+            return
+        self._pending_frame = None
+        self._draw_cam(frame)
+
     def _draw_cam(self, pil_img: Image.Image):
-        # 現在のモードに応じたキャンバスを選択
-        canvas = self._s_cam_c if self._mode == 'send' else self._r_cam_c
-        photo  = ImageTk.PhotoImage(pil_img)
-        canvas.delete('all')
-        canvas.create_image(0, 0, anchor='nw', image=photo)
-        canvas._img = photo  # GC防止
+        lbl   = self._s_cam_c if self._mode == 'send' else self._r_cam_c
+        photo = ImageTk.PhotoImage(pil_img)
+        lbl.config(image=photo)
+        lbl._img = photo  # GC防止
+
+    def _on_cam_disconnect(self):
+        """カメラ切断時にステータスラベルにエラーを表示する"""
+        st = self._s_st if self._mode == 'send' else self._r_st
+        st.config(
+            text='カメラが切断されました。\n別のカメラを選択してください。',
+            fg=RED)
 
     def _on_qr(self, data: str):
         if self._mode == 'send':
@@ -416,8 +451,7 @@ class QRApp(tk.Tk):
         self.s_idx = idx
 
         photo = gen_qr(self.s_chunks[idx])
-        self._sq_c.delete('all')
-        self._sq_c.create_image(0, 0, anchor='nw', image=photo)
+        self._sq_c.config(image=photo)
         self._sq_c._img = photo
 
         self._s_seq_lbl.config(text=f'{idx + 1} / {n}', fg=FG)
@@ -494,8 +528,7 @@ class QRApp(tk.Tk):
         # ACK QRを表示（重複でも毎回更新して送信側が確実にスキャンできるようにする）
         ack_str = json.dumps({'a': sid, 's': seq}, separators=(',', ':'))
         photo = gen_qr(ack_str)
-        self._rq_c.delete('all')
-        self._rq_c.create_image(0, 0, anchor='nw', image=photo)
+        self._rq_c.config(image=photo)
         self._rq_c._img = photo
 
         received = len(self.r_map)
