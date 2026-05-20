@@ -397,7 +397,9 @@ class QRApp(tk.Tk):
             bg=GREEN, fg='white',
             activebackground='#15803d', activeforeground='white',
             relief='flat', padx=14, pady=8,
-            font=('Helvetica', 10, 'bold'), cursor='hand2')
+            font=('Helvetica', 10, 'bold'), cursor='hand2',
+            state='disabled')
+        self._r_save_btn.pack(pady=8)
 
         return f
 
@@ -684,7 +686,7 @@ class QRApp(tk.Tk):
                 text=f'受信完了！  {self.r_name}  ({fmt_bytes(self.r_size)})',
                 fg=GREEN, bg=WIN,
                 activeforeground=GREEN, activebackground=WIN)
-            self._r_save_btn.pack(pady=8)
+            self._r_save_btn.config(state='normal')
 
     def _save_file(self):
         if not self.r_done:
