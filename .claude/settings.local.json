@@ -30,7 +30,11 @@
       "Read(//Library/Frameworks/Python.framework/Versions/3.11/bin/**)",
       "Bash(.venv/bin/python3 -c \"import cv2, qrcode, PIL; print\\('パッケージOK'\\)\")",
       "Bash(awk '{print \"起動OK: PID\", $2}')",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(.venv/bin/python3 -c \"import tkinter as tk; print\\('Tk version:', tk.TkVersion\\)\")",
+      "Bash(.venv/bin/python3 -c ' *)",
+      "Bash(.venv/bin/python3 main.py)",
+      "Bash(kill %1)"
     ]
   }
 }

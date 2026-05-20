@@ -5,13 +5,10 @@
 # ///
 """
 QR ファイル転送 — 双方向 Stop-and-Wait プロトコル
-
-送信側: チャンクQRを表示 → 受信側のACK QRをスキャン → 次チャンクへ
-受信側: チャンクQRをスキャン → ACK QRを表示 → 送信側がスキャン → 繰り返し
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
 import cv2
 import qrcode
 from PIL import Image, ImageTk
@@ -24,30 +21,44 @@ import time
 import os
 
 # ── 定数 ────────────────────────────────────────────────────────
-CHUNK_SIZE = 600   # 1チャンクあたりのバイト数
-QR_PX      = 340   # QR表示サイズ（ピクセル）
-CAM_W      = 340   # カメラ表示幅
-CAM_H      = 255   # カメラ表示高さ (4:3)
+CHUNK_SIZE = 600
+QR_PX      = 300
+CAM_W      = 300
+CAM_H      = 225
 
-BG     = '#0f0f0f'
-BG2    = '#1c1c1c'
-BG3    = '#272727'
-FG     = '#e8e8e8'
-FG2    = '#666666'
-BLUE   = '#2563eb'
-GREEN  = '#16a34a'
-YELLOW = '#ca8a04'
-RED    = '#dc2626'
+# 完全ライトモード配色
+# macOS が fg を黒に上書きしても「黒文字×白背景」で必ず可視
+PANEL = '#ffffff'   # パネル背景（白）
+WIN   = '#f0f4f8'   # ウィンドウ背景（薄青グレー）
+HDR   = '#dbeafe'   # ヘッダー背景（薄青）
+TX    = '#1e293b'   # 本文テキスト（濃紺）
+TX2   = '#475569'   # サブテキスト
+CAM_B = '#1e293b'   # カメラ画像ボーダー
+BLUE  = '#2563eb'
+GREEN = '#16a34a'
+AMBER = '#b45309'
+RED   = '#dc2626'
 
 
-# ── QRコード生成 ─────────────────────────────────────────────────
+# ── ヘルパー: Button を Label として使う ──────────────────────────
+# macOS Aqua テーマは tk.Label の fg を黒（Light Mode）または白（Dark Mode）
+# に強制上書きする場合がある。tk.Button は bg/fg が必ず描画される。
+# ただし bg は明るい色、fg は暗い色を使えば上書きされても読める。
+def lbl(parent, text, bg=PANEL, fg=TX, font=('Helvetica', 10), **kw):
+    kw.setdefault('padx', 0)
+    kw.setdefault('pady', 0)
+    return tk.Button(
+        parent, text=text, bg=bg, fg=fg,
+        activebackground=bg, activeforeground=fg,
+        relief='flat', bd=0,
+        highlightthickness=0, cursor='arrow',
+        takefocus=0, font=font, **kw)
+
 
 def gen_qr(text: str) -> ImageTk.PhotoImage:
     qr = qrcode.QRCode(
         error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=6,
-        border=2,
-    )
+        box_size=5, border=2)
     qr.add_data(text)
     qr.make(fit=True)
     img = qr.make_image(fill_color='black', back_color='white').convert('RGB')
@@ -56,199 +67,244 @@ def gen_qr(text: str) -> ImageTk.PhotoImage:
 
 
 def fmt_bytes(n: int) -> str:
-    if n < 1024:     return f'{n} B'
-    if n < 1 << 20:  return f'{n / 1024:.1f} KB'
-    return f'{n / (1 << 20):.1f} MB'
+    if n < 1024:    return f'{n} B'
+    if n < 1 << 20: return f'{n/1024:.1f} KB'
+    return f'{n/(1<<20):.1f} MB'
 
-
-# ── アプリ本体 ───────────────────────────────────────────────────
 
 class QRApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
+        # macOS がシステムカラーで上書きするのを防ぐ
+        try:
+            self.tk_setPalette(
+                background=WIN, foreground=TX,
+                activeBackground=WIN, activeForeground=TX,
+                highlightBackground=WIN, highlightColor=BLUE,
+                selectBackground=BLUE, selectForeground='white',
+                troughColor='#e2e8f0')
+        except Exception:
+            pass
         self.title('QR ファイル転送')
-        self.configure(bg=BG)
-        self.geometry('770x590')
+        self.configure(bg=WIN)
+        self.geometry('730x590')
         self.resizable(False, False)
 
-        # Label用プレースホルダー画像（Canvas廃止・クロスプラットフォーム対応）
+        # プレースホルダー画像
         self._ph_qr  = ImageTk.PhotoImage(Image.new('RGB', (QR_PX, QR_PX), 'white'))
-        self._ph_cam = ImageTk.PhotoImage(Image.new('RGB', (CAM_W, CAM_H), '#111111'))
+        self._ph_cam = ImageTk.PhotoImage(Image.new('RGB', (CAM_W, CAM_H), '#c8d4e0'))
 
         # カメラ
-        self._cam_idx       = 0
-        self.cam_running    = False
-        self._last_qr       = ''
-        self._last_qr_t     = 0.0
-        self._pending_frame = None   # 最新フレームだけ保持
-        self._draw_scheduled = False  # after()の多重登録を防ぐ
+        self._cam_idx        = 0
+        self.cam_running     = False
+        self._last_qr        = ''
+        self._last_qr_t      = 0.0
+        self._pending_frame  = None
+        self._draw_scheduled = False
 
         # 送信ステート
-        self.s_chunks:  list[str]    = []
-        self.s_idx      = 0
-        self.s_session  = ''
-        self.s_done     = False
+        self.s_chunks:   list[str]       = []
+        self.s_idx       = 0
+        self.s_session   = ''
+        self.s_done      = False
 
         # 受信ステート
-        self.r_map:     dict[int, dict] = {}
-        self.r_session  = ''
-        self.r_total    = 0
-        self.r_name     = 'file'
-        self.r_size     = 0
-        self.r_done     = False
+        self.r_map:      dict[int, dict] = {}
+        self.r_session   = ''
+        self.r_total     = 0
+        self.r_name      = 'file'
+        self.r_size      = 0
+        self.r_done      = False
 
         self._mode = 'send'
         self._build_ui()
-        self._start_camera()
+        self.update_idletasks()
+        self.configure(bg=WIN)
+        threading.Thread(target=self._enumerate_cams, daemon=True).start()
         self.protocol('WM_DELETE_WINDOW', self._quit)
 
     # ── UIビルド ─────────────────────────────────────────────────
 
     def _build_ui(self):
-        # ヘッダー
-        hdr = tk.Frame(self, bg='#111111')
-        hdr.pack(fill='x')
+        # ── ヘッダー（ライト背景） ──────────────────────────────
+        hdr = tk.Frame(self, bg=HDR, bd=0)
+        hdr.pack(side='top', fill='x')
 
-        tk.Label(hdr, text='▣  QR ファイル転送',
-                 font=('Helvetica', 14, 'bold'),
-                 bg='#111111', fg=FG, padx=14, pady=10).pack(side='left')
+        # 区切り線（下線）
+        tk.Frame(self, bg='#bfdbfe', height=1).pack(side='top', fill='x')
 
-        # カメラ選択
-        cam_fr = tk.Frame(hdr, bg='#111111', padx=6)
-        cam_fr.pack(side='right')
+        # タイトル
+        lbl(hdr, '▣  QR ファイル転送', HDR, TX,
+            font=('Helvetica', 13, 'bold'), padx=14, pady=10).pack(side='left')
 
-        tk.Label(cam_fr, text='カメラ:', bg='#111111', fg=FG2,
-                 font=('Helvetica', 10)).pack(side='left')
-
-        self._cam_var   = tk.StringVar(value='検索中…')
-        self._cam_combo = ttk.Combobox(
-            cam_fr, textvariable=self._cam_var,
-            state='disabled', width=14, font=('Helvetica', 10))
-        self._cam_combo.pack(side='left', padx=(4, 0), pady=8)
-        self._cam_combo.bind('<<ComboboxSelected>>', self._on_cam_select)
-
-        bf = tk.Frame(hdr, bg='#111111', padx=10)
-        bf.pack(side='right')
-
-        self._bsend = tk.Button(bf, text='📤 送信',
-            command=lambda: self._switch('send'),
-            bg=BLUE, fg='white', relief='flat',
-            padx=14, pady=7, font=('Helvetica', 11, 'bold'), cursor='hand2')
+        # モード切替ボタン
+        bf = tk.Frame(hdr, bg=HDR)
+        bf.pack(side='right', padx=8)
+        self._bsend = tk.Button(
+            bf, text='送信', command=lambda: self._switch('send'),
+            bg=BLUE, fg='white',
+            activebackground='#1d4ed8', activeforeground='white',
+            relief='flat', padx=14, pady=6,
+            font=('Helvetica', 11, 'bold'), cursor='hand2')
         self._bsend.pack(side='left', padx=3, pady=8)
-
-        self._brecv = tk.Button(bf, text='📥 受信',
-            command=lambda: self._switch('recv'),
-            bg=BG3, fg=FG2, relief='flat',
-            padx=14, pady=7, font=('Helvetica', 11), cursor='hand2')
+        self._brecv = tk.Button(
+            bf, text='受信', command=lambda: self._switch('recv'),
+            bg='#e2e8f0', fg=TX,
+            activebackground='#cbd5e1', activeforeground=TX,
+            relief='flat', padx=14, pady=6,
+            font=('Helvetica', 11), cursor='hand2')
         self._brecv.pack(side='left', padx=3, pady=8)
+
+        # カメラ選択（ライト背景）
+        cf = tk.Frame(hdr, bg=HDR, padx=6)
+        cf.pack(side='right')
+        lbl(cf, 'カメラ:', HDR, TX2,
+            font=('Helvetica', 10)).pack(side='left')
+        self._cam_var = tk.StringVar(value='検索中…')
+        self._cam_menu = tk.OptionMenu(cf, self._cam_var, '検索中…')
+        self._cam_menu.config(
+            bg=PANEL, fg=TX,
+            activebackground='#e2e8f0', activeforeground=TX,
+            relief='flat', highlightthickness=0,
+            font=('Helvetica', 10), state='disabled', bd=0)
+        self._cam_menu['menu'].config(bg=PANEL, fg=TX)
+        self._cam_menu.pack(side='left', padx=(4, 0), pady=8)
+
+        # ── コンテンツ ─────────────────────────────────────────
+        self._content = tk.Frame(self, bg=WIN)
+        self._content.pack(side='top', fill='both', expand=True)
 
         self._sf = self._build_send_ui()
         self._rf = self._build_recv_ui()
         self._sf.pack(fill='both', expand=True)
 
-        # バックグラウンドでカメラ一覧を検索
-        threading.Thread(target=self._enumerate_cams, daemon=True).start()
-
-    def _qr_panel(self, parent, title: str):
-        """QRコード表示パネルを作成して (frame, label, chunk_label) を返す"""
-        outer = tk.Frame(parent, bg=BG2, padx=10, pady=10)
-        tk.Label(outer, text=title, bg=BG2, fg=FG2,
-                 font=('Helvetica', 9)).pack()
-        img_lbl = tk.Label(outer, image=self._ph_qr, bg='white', bd=0)
-        img_lbl._img = self._ph_qr
-        img_lbl.pack(pady=(6, 4))
-        chunk_lbl = tk.Label(outer, text='— / —',
-                             bg=BG2, fg=FG, font=('Helvetica', 18, 'bold'))
-        chunk_lbl.pack()
-        tk.Label(outer, text='チャンク', bg=BG2, fg='#444',
-                 font=('Helvetica', 8)).pack(pady=(1, 8))
-        return outer, img_lbl, chunk_lbl
-
-    def _cam_panel(self, parent, title: str):
-        """カメラ表示パネルを作成して (frame, label, status_label) を返す"""
-        outer = tk.Frame(parent, bg=BG2, padx=10, pady=10)
-        tk.Label(outer, text=title, bg=BG2, fg=FG2,
-                 font=('Helvetica', 9)).pack()
-        img_lbl = tk.Label(outer, image=self._ph_cam, bg='#111111', bd=0)
-        img_lbl._img = self._ph_cam
-        img_lbl.pack(pady=(6, 4))
-        st = tk.Label(outer, text='',
-                      bg=BG2, fg=FG2,
-                      font=('Helvetica', 9), wraplength=320)
-        st.pack()
-        return outer, img_lbl, st
+    # ── 送信 UI ───────────────────────────────────────────────────
 
     def _build_send_ui(self):
-        f = tk.Frame(self, bg=BG, padx=14, pady=12)
+        f = tk.Frame(self._content, bg=WIN)
 
         # ファイル選択行
-        fr = tk.Frame(f, bg=BG)
-        fr.pack(fill='x', pady=(0, 10))
-        tk.Button(fr, text='📁 ファイルを選択',
-                  command=self._pick_file,
-                  bg='#374151', fg=FG, relief='flat', padx=12, pady=7,
-                  font=('Helvetica', 10), cursor='hand2').pack(side='left')
-        self._s_filelbl = tk.Label(fr, text='ファイル未選択',
-                                    bg=BG, fg=FG2, font=('Helvetica', 10))
-        self._s_filelbl.pack(side='left', padx=10)
+        fr = tk.Frame(f, bg=WIN)
+        fr.pack(fill='x', padx=16, pady=(12, 8))
+        self._btn_file = tk.Button(
+            fr, text='ファイルを選択', command=self._pick_file,
+            bg='#475569', fg='white',
+            activebackground='#64748b', activeforeground='white',
+            relief='flat', padx=12, pady=6,
+            font=('Helvetica', 10), cursor='hand2')
+        self._btn_file.pack(side='left')
+        self._s_filelbl = lbl(fr, 'ファイル未選択', WIN, TX2,
+                               font=('Helvetica', 10), padx=10)
+        self._s_filelbl.pack(side='left')
 
-        panels = tk.Frame(f, bg=BG)
-        panels.pack()
+        # 2パネル行
+        row = tk.Frame(f, bg=WIN)
+        row.pack(padx=8)
 
-        # 左: 送信QR
-        lp, self._sq_c, self._s_seq_lbl = self._qr_panel(
-            panels, '送信QR — 受信側に見せる')
-        lp.grid(row=0, column=0, padx=(0, 8))
+        # 左: QRパネル（白背景）
+        lp = tk.Frame(row, bg=PANEL, bd=1, relief='solid',
+                      highlightbackground='#cbd5e1', highlightthickness=0)
+        lp.pack(side='left', padx=6)
+        lbl(lp, '送信QR  （受信側に見せる）', PANEL, TX2,
+            font=('Helvetica', 9), pady=6).pack()
+        self._sq_c = tk.Label(lp, image=self._ph_qr, bg='white', bd=0,
+                              highlightthickness=0)
+        self._sq_c._img = self._ph_qr
+        self._sq_c.pack(padx=8, pady=2)
+        self._s_seq_lbl = lbl(lp, '— / —', PANEL, TX,
+                               font=('Helvetica', 15, 'bold'), pady=2)
+        self._s_seq_lbl.pack()
+        lbl(lp, 'チャンク', PANEL, TX2,
+            font=('Helvetica', 8), pady=4).pack()
 
-        # 右: カメラ（ACKスキャン）
-        rp, self._s_cam_c, self._s_st = self._cam_panel(
-            panels, 'ACKスキャン — 受信側の画面を撮影')
-        self._s_st.config(text='ファイルを選択するとQRが表示されます')
-        rp.grid(row=0, column=1, padx=(8, 0))
+        # 右: カメラパネル（白背景で枠付き）
+        rp = tk.Frame(row, bg=PANEL, bd=1, relief='solid',
+                      highlightbackground='#cbd5e1', highlightthickness=0)
+        rp.pack(side='left', padx=6)
+        lbl(rp, 'ACKスキャン  （受信側の画面を撮影）', PANEL, TX2,
+            font=('Helvetica', 9), pady=6).pack()
+        self._s_cam_c = tk.Label(rp, image=self._ph_cam, bg='#c8d4e0', bd=1,
+                                 relief='solid', highlightthickness=0)
+        self._s_cam_c._img = self._ph_cam
+        self._s_cam_c.pack(padx=8, pady=2)
+        self._s_st = lbl(rp, 'ファイルを選択するとQRが表示されます',
+                          PANEL, TX2,
+                          font=('Helvetica', 9), pady=6, wraplength=300)
+        self._s_st.pack()
 
-        # プログレス
-        pg = tk.Frame(f, bg=BG)
-        pg.pack(fill='x', pady=(10, 0))
-        self._s_prog = ttk.Progressbar(pg, maximum=100, length=700)
-        self._s_prog.pack(fill='x')
+        # プログレスバー
+        self._s_prog = tk.Canvas(f, bg='#e2e8f0', height=6, highlightthickness=0)
+        self._s_prog.pack(fill='x', padx=16, pady=(8, 12))
+        self._s_prog_fill = self._s_prog.create_rectangle(
+            0, 0, 0, 6, fill=BLUE, width=0)
 
         return f
+
+    # ── 受信 UI ───────────────────────────────────────────────────
 
     def _build_recv_ui(self):
-        f = tk.Frame(self, bg=BG, padx=14, pady=12)
+        f = tk.Frame(self._content, bg=WIN)
 
-        self._r_infolbl = tk.Label(
-            f, text='送信側のQRコードをスキャン待ち…',
-            bg=BG, fg=FG2, font=('Helvetica', 10))
-        self._r_infolbl.pack(fill='x', pady=(0, 10))
+        self._r_infolbl = lbl(f, '送信側のQRコードをスキャン待ち…',
+                               WIN, TX2, font=('Helvetica', 10), pady=2)
+        self._r_infolbl.pack(fill='x', padx=16, pady=(12, 8))
 
-        panels = tk.Frame(f, bg=BG)
-        panels.pack()
+        row = tk.Frame(f, bg=WIN)
+        row.pack(padx=8)
 
-        # 左: ACK QR
-        lp, self._rq_c, self._r_seq_lbl = self._qr_panel(
-            panels, 'ACK QR — 送信側に見せる')
-        lp.grid(row=0, column=0, padx=(0, 8))
+        # 左: ACK QRパネル（白背景）
+        lp = tk.Frame(row, bg=PANEL, bd=1, relief='solid',
+                      highlightbackground='#cbd5e1', highlightthickness=0)
+        lp.pack(side='left', padx=6)
+        lbl(lp, 'ACK QR  （送信側に見せる）', PANEL, TX2,
+            font=('Helvetica', 9), pady=6).pack()
+        self._rq_c = tk.Label(lp, image=self._ph_qr, bg='white', bd=0,
+                              highlightthickness=0)
+        self._rq_c._img = self._ph_qr
+        self._rq_c.pack(padx=8, pady=2)
+        self._r_seq_lbl = lbl(lp, '— / —', PANEL, TX,
+                               font=('Helvetica', 15, 'bold'), pady=2)
+        self._r_seq_lbl.pack()
+        lbl(lp, 'チャンク', PANEL, TX2,
+            font=('Helvetica', 8), pady=4).pack()
 
-        # 右: カメラ（チャンクスキャン）
-        rp, self._r_cam_c, self._r_st = self._cam_panel(
-            panels, 'チャンクスキャン — 送信側の画面を撮影')
-        self._r_st.config(text='送信側の画面にカメラを向けてください')
-        rp.grid(row=0, column=1, padx=(8, 0))
+        # 右: カメラパネル（白背景）
+        rp = tk.Frame(row, bg=PANEL, bd=1, relief='solid',
+                      highlightbackground='#cbd5e1', highlightthickness=0)
+        rp.pack(side='left', padx=6)
+        lbl(rp, 'チャンクスキャン  （送信側の画面を撮影）', PANEL, TX2,
+            font=('Helvetica', 9), pady=6).pack()
+        self._r_cam_c = tk.Label(rp, image=self._ph_cam, bg='#c8d4e0', bd=1,
+                                 relief='solid', highlightthickness=0)
+        self._r_cam_c._img = self._ph_cam
+        self._r_cam_c.pack(padx=8, pady=2)
+        self._r_st = lbl(rp, '送信側の画面にカメラを向けてください',
+                          PANEL, TX2,
+                          font=('Helvetica', 9), pady=6, wraplength=300)
+        self._r_st.pack()
 
-        # プログレス + 保存ボタン
-        pg = tk.Frame(f, bg=BG)
-        pg.pack(fill='x', pady=(10, 0))
-        self._r_prog = ttk.Progressbar(pg, maximum=100, length=700)
-        self._r_prog.pack(fill='x')
+        # プログレスバー + 保存
+        self._r_prog = tk.Canvas(f, bg='#e2e8f0', height=6, highlightthickness=0)
+        self._r_prog.pack(fill='x', padx=16, pady=(8, 8))
+        self._r_prog_fill = self._r_prog.create_rectangle(
+            0, 0, 0, 6, fill=GREEN, width=0)
+
         self._r_save_btn = tk.Button(
-            pg, text='💾 ファイルを保存', command=self._save_file,
-            bg=GREEN, fg='white', relief='flat', padx=14, pady=8,
+            f, text='ファイルを保存', command=self._save_file,
+            bg=GREEN, fg='white',
+            activebackground='#15803d', activeforeground='white',
+            relief='flat', padx=14, pady=8,
             font=('Helvetica', 10, 'bold'), cursor='hand2')
-        # 完了時に pack
 
         return f
+
+    def _prog_update(self, canvas, bar_id, pct: float):
+        canvas.update_idletasks()
+        w = canvas.winfo_width()
+        canvas.coords(bar_id, 0, 0, int(w * pct / 100), 6)
+
+    # ── モード切替 ────────────────────────────────────────────────
 
     def _switch(self, mode: str):
         if mode == self._mode:
@@ -258,21 +314,24 @@ class QRApp(tk.Tk):
             self._rf.pack_forget()
             self._sf.pack(fill='both', expand=True)
             self._bsend.configure(bg=BLUE, fg='white',
+                                  activebackground='#1d4ed8', activeforeground='white',
                                   font=('Helvetica', 11, 'bold'))
-            self._brecv.configure(bg=BG3, fg=FG2,
+            self._brecv.configure(bg='#e2e8f0', fg=TX,
+                                  activebackground='#cbd5e1', activeforeground=TX,
                                   font=('Helvetica', 11))
         else:
             self._sf.pack_forget()
             self._rf.pack(fill='both', expand=True)
             self._brecv.configure(bg=GREEN, fg='white',
+                                  activebackground='#15803d', activeforeground='white',
                                   font=('Helvetica', 11, 'bold'))
-            self._bsend.configure(bg=BG3, fg=FG2,
+            self._bsend.configure(bg='#e2e8f0', fg=TX,
+                                  activebackground='#cbd5e1', activeforeground=TX,
                                   font=('Helvetica', 11))
 
     # ── カメラ ───────────────────────────────────────────────────
 
     def _enumerate_cams(self):
-        """利用可能なカメラを 0〜7 番で探してコンボボックスを更新する"""
         found: list[int] = []
         for i in range(8):
             cap = cv2.VideoCapture(i)
@@ -280,41 +339,39 @@ class QRApp(tk.Tk):
                 found.append(i)
                 cap.release()
             elif found:
-                break  # 既に1台以上見つかった後に失敗 → それ以上はない
-
+                break
         labels = [f'カメラ {i}' for i in found] if found else ['カメラなし']
 
         def _update():
-            self._cam_combo['values'] = labels
-            self._cam_combo['state']  = 'readonly' if found else 'disabled'
+            menu = self._cam_menu['menu']
+            menu.delete(0, 'end')
+            for lbl_text in labels:
+                menu.add_command(label=lbl_text,
+                                 command=lambda t=lbl_text: self._select_cam(t))
             self._cam_var.set(labels[0])
+            self._cam_menu.config(state='normal' if found else 'disabled')
             if found:
                 self._cam_idx = found[0]
-            self._start_camera()
+                self._start_camera()
 
         self.after(0, _update)
 
-    def _on_cam_select(self, _event=None):
-        """コンボボックスで別のカメラが選ばれたら切り替える"""
-        label = self._cam_var.get()
+    def _select_cam(self, label: str):
         try:
             new_idx = int(label.split()[-1])
         except ValueError:
             return
         if new_idx == self._cam_idx:
             return
-
-        # 旧ループを止めてから新しいインデックスで再起動
+        self._cam_var.set(label)
         self.cam_running = False
         self._cam_idx    = new_idx
         self._last_qr    = ''
         self._last_qr_t  = 0.0
-
-        def _delayed_restart():
-            time.sleep(0.15)          # 旧スレッドが cap.release() するのを待つ
+        def _delayed():
+            time.sleep(0.15)
             self.after(0, self._start_camera)
-
-        threading.Thread(target=_delayed_restart, daemon=True).start()
+        threading.Thread(target=_delayed, daemon=True).start()
 
     def _start_camera(self):
         self.cam_running     = True
@@ -330,26 +387,20 @@ class QRApp(tk.Tk):
                 'カメラエラー',
                 f'カメラ {idx} を開けません\n別のカメラを選択してください'))
             return
-
-        # 高解像度カメラ（iPhoneなど）を1280×720に制限してCPU負荷を抑える
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
         detector   = cv2.QRCodeDetector()
         fail_count = 0
-
         while self.cam_running:
             ok, frame = cap.read()
             if not ok:
                 fail_count += 1
-                if fail_count >= 30:           # 約3秒連続失敗 → カメラ切断と判定
+                if fail_count >= 30:
                     self.after(0, self._on_cam_disconnect)
                     break
                 time.sleep(0.1)
                 continue
             fail_count = 0
-
-            # QR検出は640×480に縮小してから行い高負荷を避ける
             try:
                 qr_frame = cv2.resize(frame, (640, 480))
                 data, _, _ = detector.detectAndDecode(qr_frame)
@@ -361,40 +412,31 @@ class QRApp(tk.Tk):
                         self.after(0, lambda d=data: self._on_qr(d))
             except Exception:
                 pass
-
-            # 表示フレームを準備 — after()キューに溜めず最新1枚だけ置く
             small = cv2.resize(frame, (CAM_W, CAM_H))
             self._pending_frame = Image.fromarray(
                 cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
             if not self._draw_scheduled:
                 self._draw_scheduled = True
                 self.after(0, self._flush_cam_frame)
-
-            time.sleep(0.04)  # ~25fps
-
+            time.sleep(0.04)
         cap.release()
 
     def _flush_cam_frame(self):
-        """UIスレッドで最新フレームを1枚だけ描画する"""
         self._draw_scheduled = False
         frame = self._pending_frame
         if frame is None:
             return
         self._pending_frame = None
-        self._draw_cam(frame)
-
-    def _draw_cam(self, pil_img: Image.Image):
-        lbl   = self._s_cam_c if self._mode == 'send' else self._r_cam_c
-        photo = ImageTk.PhotoImage(pil_img)
-        lbl.config(image=photo)
-        lbl._img = photo  # GC防止
+        lbl_w = self._s_cam_c if self._mode == 'send' else self._r_cam_c
+        photo = ImageTk.PhotoImage(frame)
+        lbl_w.config(image=photo)
+        lbl_w._img = photo
 
     def _on_cam_disconnect(self):
-        """カメラ切断時にステータスラベルにエラーを表示する"""
         st = self._s_st if self._mode == 'send' else self._r_st
-        st.config(
-            text='カメラが切断されました。\n別のカメラを選択してください。',
-            fg=RED)
+        st.config(text='カメラが切断されました。\n別のカメラを選択してください。',
+                  fg=RED, bg=PANEL,
+                  activeforeground=RED, activebackground=PANEL)
 
     def _on_qr(self, data: str):
         if self._mode == 'send':
@@ -424,94 +466,74 @@ class QRApp(tk.Tk):
         size  = len(raw)
         total = max(1, math.ceil(size / CHUNK_SIZE))
         sid   = str(uuid.uuid4())[:8].upper()
-
         self.s_chunks = []
         for i in range(total):
             ch = raw[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE]
-            p: dict = {
-                'i': sid, 's': i, 't': total,
-                'd': base64.b64encode(ch).decode(),
-            }
+            p: dict = {'i': sid, 's': i, 't': total,
+                       'd': base64.b64encode(ch).decode()}
             if i == 0:
                 p['n'] = name
                 p['z'] = size
             self.s_chunks.append(json.dumps(p, separators=(',', ':')))
-
         self.s_session = sid
         self.s_idx     = 0
         self.s_done    = False
-
         self._s_filelbl.config(
-            text=f'{name}  ({fmt_bytes(size)},  {total} チャンク)', fg=FG)
-
+            text=f'{name}  ({fmt_bytes(size)},  {total} チャンク)',
+            fg=TX, bg=WIN,
+            activeforeground=TX, activebackground=WIN)
         self._show_chunk(0)
 
     def _show_chunk(self, idx: int):
         n = len(self.s_chunks)
         self.s_idx = idx
-
         photo = gen_qr(self.s_chunks[idx])
         self._sq_c.config(image=photo)
         self._sq_c._img = photo
-
-        self._s_seq_lbl.config(text=f'{idx + 1} / {n}', fg=FG)
-        self._s_prog['value'] = (idx + 1) / n * 100
+        self._s_seq_lbl.config(text=f'{idx + 1} / {n}', fg=TX,
+                                activeforeground=TX)
+        self._prog_update(self._s_prog, self._s_prog_fill, (idx + 1) / n * 100)
         self._s_st.config(
-            text=f'チャンク {idx + 1}/{n} を表示中\n'
-                 f'← 受信側のACK QRをスキャンしたら次へ進みます',
-            fg=YELLOW)
+            text=f'チャンク {idx + 1}/{n} を表示中\n受信側のACK QRをスキャンしたら次へ',
+            fg=AMBER, bg=PANEL,
+            activeforeground=AMBER, activebackground=PANEL)
 
     def _handle_ack(self, data: str):
-        """受信側のACK QRを解析して次のチャンクへ進む"""
         try:
             obj = json.loads(data)
         except Exception:
             return
-
-        # セッションIDチェック
         if obj.get('a') != self.s_session:
             return
-
-        acked: int = obj.get('s', -1)
-
-        # 現在のチャンクのACKだけを受け付ける
-        if acked != self.s_idx:
+        if obj.get('s', -1) != self.s_idx:
             return
-
         nxt = self.s_idx + 1
         if nxt >= len(self.s_chunks):
-            # 全チャンク完了
             self.s_done = True
-            self._s_seq_lbl.config(text='完了 ✓', fg=GREEN)
-            self._s_st.config(text='✅ 全チャンクの送信が完了しました！', fg=GREEN)
-            self._s_prog['value'] = 100
+            self._s_seq_lbl.config(text='完了', fg=GREEN, activeforeground=GREEN)
+            self._s_st.config(text='全チャンクの送信が完了しました！',
+                               fg=GREEN, bg=PANEL,
+                               activeforeground=GREEN, activebackground=PANEL)
+            self._prog_update(self._s_prog, self._s_prog_fill, 100)
         else:
             self._show_chunk(nxt)
 
     # ── 受信ロジック ──────────────────────────────────────────────
 
     def _handle_chunk(self, data: str):
-        """送信側のチャンクQRを解析してACKを表示する"""
         try:
             obj = json.loads(data)
         except Exception:
             return
-
         if 'i' not in obj or 'd' not in obj:
             return
-
         sid: str   = obj['i']
         seq: int   = obj.get('s', -1)
         total: int = obj.get('t', 0)
-
         if seq < 0 or total <= 0:
             return
-
-        # 異なるセッションは無視
         if self.r_session and self.r_session != sid:
             return
-
-        # 初回受信でセッション初期化
         if not self.r_session:
             self.r_session = sid
             self.r_total   = total
@@ -520,30 +542,27 @@ class QRApp(tk.Tk):
             self._r_infolbl.config(
                 text=f'受信中: {self.r_name}  '
                      f'({fmt_bytes(self.r_size)}, {total} チャンク)',
-                fg=FG)
-
-        # チャンクを保存（重複時は上書きしない）
+                fg=TX, bg=WIN,
+                activeforeground=TX, activebackground=WIN)
         self.r_map.setdefault(seq, obj)
-
-        # ACK QRを表示（重複でも毎回更新して送信側が確実にスキャンできるようにする）
         ack_str = json.dumps({'a': sid, 's': seq}, separators=(',', ':'))
         photo = gen_qr(ack_str)
         self._rq_c.config(image=photo)
         self._rq_c._img = photo
-
         received = len(self.r_map)
-        self._r_seq_lbl.config(text=f'{received} / {total}', fg=FG)
-        self._r_prog['value'] = received / total * 100
+        self._r_seq_lbl.config(text=f'{received} / {total}', fg=TX,
+                                activeforeground=TX)
+        self._prog_update(self._r_prog, self._r_prog_fill, received / total * 100)
         self._r_st.config(
-            text=f'チャンク {seq + 1}/{total} を受信 ✓\n'
-                 f'← ACK QRを送信側にスキャンさせてください',
-            fg=GREEN)
-
+            text=f'チャンク {seq + 1}/{total} を受信\nACK QRを送信側にスキャンさせてください',
+            fg=GREEN, bg=PANEL,
+            activeforeground=GREEN, activebackground=PANEL)
         if received >= total and not self.r_done:
             self.r_done = True
             self._r_infolbl.config(
-                text=f'✅ 受信完了！  {self.r_name}  ({fmt_bytes(self.r_size)})',
-                fg=GREEN)
+                text=f'受信完了！  {self.r_name}  ({fmt_bytes(self.r_size)})',
+                fg=GREEN, bg=WIN,
+                activeforeground=GREEN, activebackground=WIN)
             self._r_save_btn.pack(pady=8)
 
     def _save_file(self):
@@ -556,8 +575,7 @@ class QRApp(tk.Tk):
         try:
             data = b''.join(
                 base64.b64decode(self.r_map[i]['d'])
-                for i in range(self.r_total)
-            )
+                for i in range(self.r_total))
             with open(path, 'wb') as fh:
                 fh.write(data)
             messagebox.showinfo('保存完了', f'保存しました:\n{path}')
