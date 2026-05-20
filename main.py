@@ -352,6 +352,23 @@ class QRApp(tk.Tk):
                                WIN, TX2, font=('Helvetica', 10), pady=2)
         self._r_infolbl.pack(fill='x', padx=16, pady=(12, 8))
 
+        save_row = tk.Frame(f, bg=WIN)
+        save_row.pack(fill='x', padx=16, pady=(0, 8))
+
+        self._r_save_btn = tk.Button(
+            save_row, text='ファイルを保存', command=self._save_file,
+            bg=GREEN, fg='white',
+            activebackground='#15803d', activeforeground='white',
+            relief='flat', padx=14, pady=8,
+            font=('Helvetica', 10, 'bold'), cursor='hand2',
+            state='disabled')
+        self._r_save_btn.pack(side='left')
+
+        self._r_save_hint = lbl(
+            save_row, '受信完了後に保存できます',
+            WIN, TX2, font=('Helvetica', 9), padx=10)
+        self._r_save_hint.pack(side='left')
+
         row = tk.Frame(f, bg=WIN)
         row.pack(padx=10, pady=(4, 0))
 
@@ -391,15 +408,6 @@ class QRApp(tk.Tk):
         self._r_prog.pack(fill='x', padx=16, pady=(8, 8))
         self._r_prog_fill = self._r_prog.create_rectangle(
             0, 0, 0, 6, fill=GREEN, width=0)
-
-        self._r_save_btn = tk.Button(
-            f, text='ファイルを保存', command=self._save_file,
-            bg=GREEN, fg='white',
-            activebackground='#15803d', activeforeground='white',
-            relief='flat', padx=14, pady=8,
-            font=('Helvetica', 10, 'bold'), cursor='hand2',
-            state='disabled')
-        self._r_save_btn.pack(pady=8)
 
         return f
 
@@ -687,6 +695,10 @@ class QRApp(tk.Tk):
                 fg=GREEN, bg=WIN,
                 activeforeground=GREEN, activebackground=WIN)
             self._r_save_btn.config(state='normal')
+            self._r_save_hint.config(
+                text='保存ボタンを押して保存先を選択してください',
+                fg=GREEN, bg=WIN,
+                activeforeground=GREEN, activebackground=WIN)
 
     def _save_file(self):
         if not self.r_done:
