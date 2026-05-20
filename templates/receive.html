@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>受信 — QR ファイル転送</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f0f0f;
+    color: #e8e8e8;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  header {
+    width: 100%;
+    max-width: 600px;
+    padding: 1.2rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  header a { color: #666; text-decoration: none; font-size: 0.9rem; }
+  header a:hover { color: #aaa; }
+  h1 { font-size: 1.3rem; font-weight: 600; }
+
+  main {
+    width: 100%;
+    max-width: 560px;
+    padding: 0 1.5rem 3rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  /* ─── Camera ─── */
+  #cam-section { display: flex; flex-direction: column; gap: 1rem; }
+
+  #cam-wrap {
+    position: relative;
+    background: #111;
+    border-radius: 16px;
+    overflow: hidden;
+    aspect-ratio: 4/3;
+    width: 100%;
+  }
+  #cam-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  #scan-canvas { display: none; }
+
+  .scan-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .scan-frame {
+    width: 200px;
+    height: 200px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 8px;
+    position: relative;
+  }
+  .scan-frame::before, .scan-frame::after,
+  .scan-frame span::before, .scan-frame span::after {
+    content: '';
+    position: absolute;
+    width: 20px; height: 20px;
+    border-color: #2563eb;
+    border-style: solid;
+  }
+  .scan-frame::before  { top: -2px; left: -2px;  border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
+  .scan-frame::after   { top: -2px; right: -2px; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
+  .scan-frame span::before { bottom: -2px; left: -2px;  border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
+  .scan-frame span::after  { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
+
+  .scan-line {
+    position: absolute;
+    left: 4px; right: 4px;
+    height: 2px;
+    background: linear-gradient(to right, transparent, #2563eb, transparent);
+    animation: scan 2s linear infinite;
+    border-radius: 2px;
+  }
+  @keyframes scan { 0% { top: 10px; } 100% { top: calc(100% - 12px); } }
+
+  .cam-status {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.8));
+    padding: 1rem 0.75rem 0.6rem;
+    font-size: 0.8rem;
+    color: #aaa;
+    text-align: center;
+  }
+  .cam-status.ok { color: #4ade80; }
+
+  #start-btn {
+    background: #16a34a;
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 0.9rem;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    transition: background 0.15s;
+  }
+  #start-btn:hover { background: #15803d; }
+  #start-btn:disabled { background: #333; color: #666; cursor: default; }
+
+  /* ─── Progress ─── */
+  #progress-section {
+    background: #1a1a1a;
+    border-radius: 14px;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.5rem;
+    text-align: center;
+  }
+  .stat-box {
+    background: #111;
+    border-radius: 10px;
+    padding: 0.75rem 0.5rem;
+  }
+  .stat-val { font-size: 1.5rem; font-weight: 700; }
+  .stat-key { font-size: 0.72rem; color: #666; margin-top: 2px; }
+
+  .progress-track {
+    height: 8px;
+    background: #2a2a2a;
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(to right, #2563eb, #16a34a);
+    border-radius: 99px;
+    transition: width 0.3s ease;
+  }
+
+  .missing-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .chip {
+    background: #2a1515;
+    border: 1px solid #4a2020;
+    color: #f87171;
+    border-radius: 6px;
+    padding: 2px 7px;
+    font-size: 0.75rem;
+  }
+  .chip-more { background: #1a1a1a; border-color: #333; color: #666; }
+
+  .session-id {
+    font-size: 0.75rem;
+    color: #444;
+    text-align: right;
+  }
+
+  /* ─── Done ─── */
+  #done-section {
+    display: none;
+    background: #0d1f15;
+    border: 1px solid #1a4d2a;
+    border-radius: 14px;
+    padding: 1.75rem;
+    text-align: center;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+  #done-section .check { font-size: 3rem; }
+  #done-section h2 { font-size: 1.2rem; font-weight: 700; color: #4ade80; }
+  #done-section p { font-size: 0.85rem; color: #888; }
+
+  #download-btn {
+    background: #16a34a;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 0.8rem 2rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  #download-btn:hover { background: #15803d; }
+
+  #again-btn {
+    background: transparent;
+    border: 1px solid #333;
+    color: #888;
+    border-radius: 10px;
+    padding: 0.6rem 1.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  #again-btn:hover { border-color: #555; color: #ccc; }
+
+  /* ─── Idle hint ─── */
+  #idle-hint {
+    text-align: center;
+    color: #555;
+    font-size: 0.85rem;
+    padding: 0.5rem 0;
+  }
+</style>
+</head>
+<body>
+<header>
+  <a href="/">← ホーム</a>
+  <h1>📥 受信</h1>
+</header>
+<main>
+  <div id="cam-section">
+    <div id="cam-wrap">
+      <video id="cam-video" autoplay playsinline muted></video>
+      <canvas id="scan-canvas"></canvas>
+      <div class="scan-overlay">
+        <div class="scan-frame">
+          <span></span>
+          <div class="scan-line"></div>
+        </div>
+      </div>
+      <div class="cam-status" id="cam-status">カメラ未起動</div>
+    </div>
+    <button id="start-btn">📷 カメラを起動してスキャン開始</button>
+  </div>
+
+  <div id="idle-hint">送信側の画面にカメラを向けてください</div>
+
+  <div id="progress-section">
+    <div class="stat-row">
+      <div class="stat-box">
+        <div class="stat-val" id="stat-recv" style="color:#4ade80">0</div>
+        <div class="stat-key">受信済み</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" id="stat-total" style="color:#888">—</div>
+        <div class="stat-key">合計チャンク</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" id="stat-miss" style="color:#f87171">—</div>
+        <div class="stat-key">不足</div>
+      </div>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+    <div class="missing-chips" id="missing-chips"></div>
+    <div class="session-id" id="session-id"></div>
+  </div>
+
+  <div id="done-section">
+    <div class="check">✅</div>
+    <h2>受信完了！</h2>
+    <p id="done-info">ファイルの準備ができました</p>
+    <button id="download-btn">⬇️ ダウンロード</button>
+    <button id="again-btn">もう一度受信する</button>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script>
+const video      = document.getElementById('cam-video');
+const scanCanvas = document.getElementById('scan-canvas');
+const camStatus  = document.getElementById('cam-status');
+const startBtn   = document.getElementById('start-btn');
+const statRecv   = document.getElementById('stat-recv');
+const statTotal  = document.getElementById('stat-total');
+const statMiss   = document.getElementById('stat-miss');
+const progressEl = document.getElementById('progress-fill');
+const missingEl  = document.getElementById('missing-chips');
+const sessionEl  = document.getElementById('session-id');
+const doneSection= document.getElementById('done-section');
+const doneInfo   = document.getElementById('done-info');
+const downloadBtn= document.getElementById('download-btn');
+const againBtn   = document.getElementById('again-btn');
+const idleHint   = document.getElementById('idle-hint');
+
+const ctx = scanCanvas.getContext('2d', { willReadFrequently: true });
+
+let scanning     = false;
+let animFrame    = null;
+let receivedMap  = new Map(); // seq -> chunk obj
+let sessionInfo  = null;      // { id, total, name, size }
+let lastQR       = '';        // debounce same code
+let finalized    = false;
+let fileBlob     = null;
+
+// ─── Start camera ─────────────────────────────────────────────────
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  startBtn.textContent = 'カメラ起動中...';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    video.srcObject = stream;
+    await video.play();
+    scanning = true;
+    startBtn.textContent = '⏹ スキャン停止';
+    startBtn.disabled = false;
+    startBtn.style.background = '#dc2626';
+    startBtn.onclick = stopScan;
+    camStatus.textContent = 'スキャン中...';
+    camStatus.className = 'cam-status ok';
+    idleHint.style.display = 'none';
+    requestAnimationFrame(scanLoop);
+  } catch (e) {
+    startBtn.disabled = false;
+    startBtn.textContent = '📷 カメラを起動してスキャン開始';
+    camStatus.textContent = 'カメラのアクセスが拒否されました: ' + e.message;
+    camStatus.style.color = '#f87171';
+  }
+});
+
+function stopScan() {
+  scanning = false;
+  cancelAnimationFrame(animFrame);
+  if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+  video.srcObject = null;
+  startBtn.textContent = '📷 カメラを起動してスキャン開始';
+  startBtn.style.background = '';
+  startBtn.onclick = null;
+  startBtn.addEventListener('click', arguments.callee, { once: true });
+  camStatus.textContent = 'カメラ停止中';
+  camStatus.className = 'cam-status';
+}
+
+// ─── Scan loop ────────────────────────────────────────────────────
+function scanLoop() {
+  if (!scanning) return;
+
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    scanCanvas.width  = video.videoWidth;
+    scanCanvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+
+    const imageData = ctx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts: 'dontInvert'
+    });
+
+    if (code && code.data !== lastQR) {
+      lastQR = code.data;
+      processChunk(code.data);
+    }
+  }
+
+  animFrame = requestAnimationFrame(scanLoop);
+}
+
+// ─── Process decoded QR data ─────────────────────────────────────
+function processChunk(raw) {
+  let chunk;
+  try { chunk = JSON.parse(raw); } catch { return; }
+  if (!chunk.i || chunk.s === undefined || chunk.t === undefined || !chunk.d) return;
+
+  // If a different session arrives, ask the user
+  if (sessionInfo && sessionInfo.id !== chunk.i) {
+    if (!confirm(`別のセッション (${chunk.i}) を検出しました。現在の受信をリセットして新しいセッションを開始しますか？`)) return;
+    resetState();
+  }
+
+  if (!sessionInfo) {
+    sessionInfo = { id: chunk.i, total: chunk.t, name: chunk.n || 'file', size: chunk.z || 0 };
+    sessionEl.textContent = 'セッション: ' + chunk.i;
+  }
+
+  if (receivedMap.has(chunk.s)) return; // already have it
+
+  receivedMap.set(chunk.s, chunk);
+  updateProgress();
+
+  camStatus.textContent = `スキャン中... チャンク #${chunk.s + 1} を受信`;
+
+  if (receivedMap.size === sessionInfo.total) {
+    finalize();
+  }
+}
+
+// ─── Progress UI ──────────────────────────────────────────────────
+function updateProgress() {
+  if (!sessionInfo) return;
+  const total   = sessionInfo.total;
+  const recv    = receivedMap.size;
+  const missing = total - recv;
+
+  statRecv.textContent  = recv;
+  statTotal.textContent = total;
+  statMiss.textContent  = missing;
+  progressEl.style.width = `${(recv / total) * 100}%`;
+
+  // Show missing chunk numbers (max 20)
+  const missingSeqs = [];
+  for (let i = 0; i < total; i++) {
+    if (!receivedMap.has(i)) missingSeqs.push(i + 1);
+  }
+  missingEl.innerHTML = '';
+  const show = missingSeqs.slice(0, 20);
+  show.forEach(n => {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = n;
+    missingEl.appendChild(chip);
+  });
+  if (missingSeqs.length > 20) {
+    const more = document.createElement('span');
+    more.className = 'chip chip-more';
+    more.textContent = `+${missingSeqs.length - 20}`;
+    missingEl.appendChild(more);
+  }
+}
+
+// ─── Finalize ─────────────────────────────────────────────────────
+function finalize() {
+  if (finalized) return;
+  finalized = true;
+
+  // Stop scanning
+  scanning = false;
+  cancelAnimationFrame(animFrame);
+  camStatus.textContent = '受信完了！';
+
+  // Reconstruct binary data
+  const total = sessionInfo.total;
+  const sortedChunks = Array.from({ length: total }, (_, i) => receivedMap.get(i));
+
+  const byteArrays = sortedChunks.map(c => {
+    const bin = atob(c.d);
+    const arr = new Uint8Array(bin.length);
+    for (let j = 0; j < bin.length; j++) arr[j] = bin.charCodeAt(j);
+    return arr;
+  });
+
+  const totalBytes = byteArrays.reduce((s, a) => s + a.length, 0);
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const arr of byteArrays) { merged.set(arr, offset); offset += arr.length; }
+
+  fileBlob = new Blob([merged]);
+  const name = sessionInfo.name || 'received_file';
+  doneInfo.textContent = `${name}  (${formatBytes(merged.length)})`;
+  downloadBtn.onclick = () => triggerDownload(name);
+
+  // Show done section
+  doneSection.style.display = 'flex';
+  updateProgress();
+
+  // Auto-trigger download
+  triggerDownload(name);
+}
+
+function triggerDownload(name) {
+  if (!fileBlob) return;
+  const url = URL.createObjectURL(fileBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// ─── Reset ────────────────────────────────────────────────────────
+againBtn.addEventListener('click', () => {
+  resetState();
+  doneSection.style.display = 'none';
+  idleHint.style.display = '';
+});
+
+function resetState() {
+  receivedMap.clear();
+  sessionInfo = null;
+  finalized   = false;
+  fileBlob    = null;
+  lastQR      = '';
+  statRecv.textContent  = '0';
+  statTotal.textContent = '—';
+  statMiss.textContent  = '—';
+  progressEl.style.width = '0%';
+  missingEl.innerHTML    = '';
+  sessionEl.textContent  = '';
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
+}
+</script>
+</body>
+</html>

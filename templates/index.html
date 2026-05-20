@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QR ファイル転送</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f0f0f;
+    color: #e8e8e8;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .container {
+    text-align: center;
+    padding: 2rem;
+    max-width: 560px;
+    width: 100%;
+  }
+  .logo {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+  }
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.02em;
+  }
+  .subtitle {
+    color: #888;
+    font-size: 0.95rem;
+    margin-bottom: 3rem;
+    line-height: 1.6;
+  }
+  .buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 2.5rem;
+  }
+  .btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 2rem 1rem;
+    border-radius: 16px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1rem;
+    transition: transform 0.15s, opacity 0.15s;
+    cursor: pointer;
+    border: none;
+  }
+  .btn:hover { transform: scale(1.03); opacity: 0.9; }
+  .btn-send { background: #2563eb; color: #fff; }
+  .btn-recv { background: #16a34a; color: #fff; }
+  .btn-icon { font-size: 2rem; }
+  .how {
+    background: #1a1a1a;
+    border-radius: 12px;
+    padding: 1.5rem;
+    text-align: left;
+  }
+  .how h3 { font-size: 0.85rem; color: #666; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 1rem; }
+  .steps { list-style: none; }
+  .steps li {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    font-size: 0.9rem;
+    color: #aaa;
+    padding: 0.35rem 0;
+  }
+  .step-num {
+    background: #2a2a2a;
+    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    color: #666;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="logo">▣</div>
+  <h1>QR ファイル転送</h1>
+  <p class="subtitle">QRコードを連続表示してファイルを転送します。<br>同じWi-Fi不要・インターネット不要・ケーブル不要。</p>
+
+  <div class="buttons">
+    <a href="/send" class="btn btn-send">
+      <span class="btn-icon">📤</span>
+      <span>送信する</span>
+    </a>
+    <a href="/receive" class="btn btn-recv">
+      <span class="btn-icon">📥</span>
+      <span>受信する</span>
+    </a>
+  </div>
+
+  <div class="how">
+    <h3>使い方</h3>
+    <ul class="steps">
+      <li><span class="step-num">1</span>送信側でファイルを選択してQRコードを表示する</li>
+      <li><span class="step-num">2</span>受信側でカメラを起動して画面に向ける</li>
+      <li><span class="step-num">3</span>全チャンクを受信したら自動でダウンロード</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>

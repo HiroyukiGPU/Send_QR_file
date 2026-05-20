@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(rtk pip *)",
+      "Bash(python app.py)",
+      "Bash(curl -s http://127.0.0.1:5000/)",
+      "Bash(python3 app.py)",
+      "Bash(lsof -ti:5000)",
+      "Bash(lsof -i:5000)",
+      "Bash(curl -s http://127.0.0.1:5001/)",
+      "Read(//private/tmp/**)",
+      "Bash(curl -s -X POST http://127.0.0.1:5001/api/prepare -F \"file=@test.txt\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('total:', d['total'], '| chunks[0][:60]:', d['chunks'][0][:60]\\)\")",
+      "Bash(open *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 main.py)",
+      "Bash(pgrep -f \"python3 main.py\")",
+      "Bash(jobs)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"PID: $!\")",
+      "Read(//tmp/**)",
+      "Bash(rtk read *)",
+      "Bash(kill 82986)",
+      "Bash(chmod +x *)"
+    ]
+  }
+}
