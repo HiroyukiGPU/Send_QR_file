@@ -19,6 +19,7 @@ import uuid
 import threading
 import time
 import os
+import sys
 
 # ── 定数 ────────────────────────────────────────────────────────
 CHUNK_SIZE = 600
@@ -123,6 +124,11 @@ class QRApp(tk.Tk):
         self.configure(bg=WIN)
         threading.Thread(target=self._enumerate_cams, daemon=True).start()
         self.protocol('WM_DELETE_WINDOW', self._quit)
+
+    def _open_camera(self, idx: int):
+        if sys.platform == 'darwin':
+            return cv2.VideoCapture(idx, cv2.CAP_AVFOUNDATION)
+        return cv2.VideoCapture(idx)
 
     # ── UIビルド ─────────────────────────────────────────────────
 
@@ -333,11 +339,15 @@ class QRApp(tk.Tk):
 
     def _enumerate_cams(self):
         found: list[int] = []
-        for i in range(8):
-            cap = cv2.VideoCapture(i)
-            if cap.isOpened():
+        max_probe = 2 if sys.platform == 'darwin' else 8
+        for i in range(max_probe):
+            cap = self._open_camera(i)
+            opened = cap.isOpened()
+            cap.release()
+            if opened:
                 found.append(i)
-                cap.release()
+                if sys.platform == 'darwin':
+                    break
             elif found:
                 break
         labels = [f'カメラ {i}' for i in found] if found else ['カメラなし']
@@ -381,7 +391,7 @@ class QRApp(tk.Tk):
 
     def _cam_loop(self):
         idx = self._cam_idx
-        cap = cv2.VideoCapture(idx)
+        cap = self._open_camera(idx)
         if not cap.isOpened():
             self.after(0, lambda: messagebox.showerror(
                 'カメラエラー',
